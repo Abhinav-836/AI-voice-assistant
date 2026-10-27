@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-echo "Setting up dataforge-rime..."
+echo "Setting up AI Voice Assistant..."
 
 python3 -m venv venv
 source venv/bin/activate
@@ -16,7 +16,7 @@ echo "Setup complete."
 echo "Next: fill in .env, then run:"
 echo "  source venv/bin/activate && python -m agent.main console   # fastest local test"
 echo "  source venv/bin/activate && python -m agent.main dev        # full LiveKit room mode"
-echo "  source venv/bin/activate && python frontend/serve.py        # browser frontend + /api/token"
+echo "  source venv/bin/activate && python frontend/serve.py        # browser frontend + API"
 echo "  source venv/bin/activate && pytest -v                       # run automated test suite"
 echo ""
 echo "NOTE: use 'python frontend/serve.py', not 'python -m http.server' —"

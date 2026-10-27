@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-Write-Host "Setting up DataForge Rime Agent on Windows..." -ForegroundColor Cyan
+Write-Host "Setting up AI Voice Assistant on Windows..." -ForegroundColor Cyan
 
 if (-not (Test-Path "venv")) {
     Write-Host "Creating Python virtual environment in .\venv..."

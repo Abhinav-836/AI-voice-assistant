@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: dataforge-rime-server
+    container_name: voice-assistant-server
     restart: unless-stopped
     ports:
       - "5500:5500"
@@ -29,7 +29,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: dataforge-rime-agent
+    container_name: voice-assistant-agent
     restart: unless-stopped
     command: ["python", "-m", "agent.main", "start"]
     environment:

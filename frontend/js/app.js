@@ -8,6 +8,7 @@ import { livekit } from './livekit.js';
 import { voiceVisualizer } from './voice.js';
 import { notifications } from './notifications.js';
 import { metricsTracker } from './metrics.js';
+import { getVoiceSettings, saveVoiceSettings, listSavedSessions, forgetSession } from './session-store.js';
 
 // State
 let conversationActive = false;
@@ -198,11 +199,15 @@ async function toggleConversation() {
   const statusText = document.getElementById('status-text');
 
   if (!conversationActive) {
-    // FIXED (BUG 1/3/5): Guard before flipping the UI state.
+    // Guard before flipping the UI state.
     // Without this, clicking the orb while LiveKit is still connecting
     // would leave the UI stuck in "Listening" even though the mic never started.
     if (!livekit.isConnected) {
-      notifications.warning('Still connecting to voice agent — please wait a moment and try again.');
+      if (state.connection.status === 'error') {
+        notifications.error('Voice service is unavailable right now. Refresh the page to try again.');
+      } else {
+        notifications.warning('Still connecting to voice agent — please wait a moment and try again.');
+      }
       return;
     }
 
@@ -210,7 +215,7 @@ async function toggleConversation() {
     conversationActive = true;
 
     try {
-      // FIXED (BUG 3): await + error handling.
+      // await + error handling.
       await voiceVisualizer.startConversation();
     } catch (e) {
       conversationActive = false;
@@ -467,37 +472,61 @@ function updateToolBadge() {
 // Modal Functions
 // ============================================================
 
+// Session History shows this browser's own sessions. The server only gives
+// a session's key to the browser that created it, so there is no way (and
+// no endpoint) to browse other people's conversations.
 async function showSessionsModal() {
   const modal = document.getElementById('modal-sessions');
   const list = document.getElementById('sessions-list');
   if (!modal || !list) return;
 
   modal.style.display = 'flex';
+  const saved = listSavedSessions();
+  if (saved.length === 0) {
+    list.innerHTML = '<div class="loading-text">No sessions yet on this device</div>';
+    return;
+  }
   list.innerHTML = '<div class="loading-text">Loading sessions...</div>';
 
-  try {
-    const resp = await fetch('/api/sessions?limit=20');
-    if (!resp.ok) throw new Error('Failed to load');
-    const data = await resp.json();
-
-    if (data.sessions && data.sessions.length > 0) {
-      list.innerHTML = data.sessions.map(s => `
-        <div class="session-item">
-          <div class="session-id">${escapeHtml(s.id)}</div>
-          <div class="session-meta">
-            <span>${s.created_at ? new Date(s.created_at).toLocaleString() : 'Unknown'}</span>
-            <span>${s.turns_count || 0} turns</span>
-            <span>${s.status || 'active'}</span>
-          </div>
-        </div>
-      `).join('');
-    } else {
-      list.innerHTML = '<div class="loading-text">No sessions found</div>';
+  const rows = await Promise.all(saved.map(async (s) => {
+    try {
+      const resp = await fetch(`/api/sessions/${encodeURIComponent(s.id)}`, {
+        headers: { 'X-Session-Key': s.key },
+      });
+      if (resp.status === 404) {
+        forgetSession(s.id); // deleted on the server, or the server was reset
+        return null;
+      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      return {
+        id: s.id,
+        createdAt: data.session?.created_at || s.createdAt,
+        status: data.session?.status || 'active',
+        turns: (data.turns || []).length,
+        tools: (data.tools || []).length,
+      };
+    } catch {
+      return { id: s.id, createdAt: s.createdAt, status: 'unavailable', turns: 0, tools: 0 };
     }
-  } catch (e) {
-    list.innerHTML = '<div class="loading-text">Failed to load sessions</div>';
-    notifications.error('Could not load sessions');
+  }));
+
+  const sessions = rows.filter(Boolean);
+  if (sessions.length === 0) {
+    list.innerHTML = '<div class="loading-text">No sessions yet on this device</div>';
+    return;
   }
+  list.innerHTML = sessions.map((s) => `
+    <div class="session-item">
+      <div class="session-id">${escapeHtml(s.id)}${s.id === state.connection.sessionId ? ' (current)' : ''}</div>
+      <div class="session-meta">
+        <span>${s.createdAt ? escapeHtml(new Date(s.createdAt).toLocaleString()) : 'Unknown'}</span>
+        <span>${s.turns} turns</span>
+        <span>${s.tools} tool calls</span>
+        <span>${escapeHtml(s.status)}</span>
+      </div>
+    </div>
+  `).join('');
 }
 
 function showSettingsModal() {
@@ -505,52 +534,48 @@ function showSettingsModal() {
   if (modal) modal.style.display = 'flex';
 }
 
-async function loadSettings() {
-  try {
-    const resp = await fetch('/api/settings?session_id=global');
-    if (resp.ok) {
-      const data = await resp.json();
-      const modelEl = document.getElementById('setting-tts-model');
-      const speakerEl = document.getElementById('setting-tts-speaker');
-      const speedEl = document.getElementById('setting-voice-speed');
-      const speedValEl = document.getElementById('setting-voice-speed-val');
+// Voice settings are saved in this browser and sent when a session starts,
+// since the agent picks its voice when it joins the room. (The old version
+// saved them to a "global" session that didn't exist, so every save failed
+// with a database foreign-key error.)
+function loadSettings() {
+  const settings = getVoiceSettings();
+  const modelEl = document.getElementById('setting-tts-model');
+  const speakerEl = document.getElementById('setting-tts-speaker');
+  const speedEl = document.getElementById('setting-voice-speed');
+  const speedValEl = document.getElementById('setting-voice-speed-val');
 
-      if (modelEl) modelEl.value = data.voice_model || 'coda';
-      if (speakerEl) speakerEl.value = data.voice_speaker || 'celeste';
-      if (speedEl) {
-        const speed = data.voice_speed || 1.0;
-        speedEl.value = speed;
-        if (speedValEl) speedValEl.textContent = speed.toFixed(2) + 'x';
-      }
-    }
-  } catch (e) {
-    console.warn('Could not load settings:', e);
+  if (modelEl) modelEl.value = settings.voice_model;
+  if (speakerEl) speakerEl.value = settings.voice_speaker;
+  if (speedEl) {
+    const speed = Number(settings.voice_speed) || 1.0;
+    speedEl.value = speed;
+    if (speedValEl) speedValEl.textContent = speed.toFixed(2) + 'x';
   }
 }
 
 async function saveSettings() {
   const settings = {
-    session_id: 'global',
     voice_model: document.getElementById('setting-tts-model')?.value || 'coda',
     voice_speaker: document.getElementById('setting-tts-speaker')?.value || 'celeste',
     voice_speed: parseFloat(document.getElementById('setting-voice-speed')?.value || 1.0),
-    auto_speak: true
   };
+  saveVoiceSettings(settings);
 
+  const modal = document.getElementById('modal-settings');
+  if (modal) modal.style.display = 'none';
+
+  // Apply the new voice right away by starting a fresh session, unless a
+  // conversation is in progress (then it applies to the next one).
+  if (conversationActive) {
+    notifications.success('✅ Saved — the new voice applies to your next conversation');
+    return;
+  }
+  notifications.success('✅ Settings saved');
   try {
-    const resp = await fetch('/api/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(settings)
-    });
-    if (resp.ok) {
-      notifications.success('✅ Settings saved');
-      const modal = document.getElementById('modal-settings');
-      if (modal) modal.style.display = 'none';
-    } else {
-      notifications.error('Failed to save settings');
-    }
+    await livekit.disconnect();
+    await livekit.connect();
   } catch (e) {
-    notifications.error('Error saving settings');
+    notifications.error('Could not restart the session with the new voice');
   }
 }

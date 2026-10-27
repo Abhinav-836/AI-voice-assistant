@@ -113,3 +113,49 @@ async def test_compare_stocks_requires_two():
     res = await compare_stocks({"symbols": ["AAPL"]})
     assert "error" in res
     assert "at least two" in res["error"]
+
+
+def _quote(symbol, price=100.0, pct=1.0, volume=9_030_436):
+    return {
+        "symbol": symbol, "current_price": price, "change": 1.0, "percent_change": pct,
+        "day_high": price, "day_low": price, "prev_close": price, "volume": volume,
+        "source": "yfinance",
+    }
+
+
+@pytest.mark.asyncio
+async def test_volume_question_speaks_volume_not_price():
+    # Regression: the voice layer used to answer volume questions with the price.
+    with patch("agent.tools.stocks._fetch_quote_sync", return_value=_quote("AAPL")):
+        res = await get_stock_quote({"symbols": ["AAPL"], "field": "volume"})
+    assert res["spoken_text"] == "AAPL trading volume is 9.03 million shares today."
+    assert "$" not in res["spoken_text"]
+
+
+@pytest.mark.asyncio
+async def test_comparison_with_one_failed_ticker_still_answers():
+    def fake(symbol, field="price"):
+        return None if symbol == "XYZQ" else _quote(symbol, price=180.0, pct=-0.5)
+
+    with patch("agent.tools.stocks._fetch_quote_sync", side_effect=fake):
+        res = await compare_stocks({"symbols": ["AAPL", "XYZQ"], "field": "price"})
+
+    assert res["is_comparison"] is True
+    assert [r["symbol"] for r in res["results"]] == ["AAPL"]
+    assert res["failed_symbols"] == ["XYZQ"]
+    assert "AAPL at $180.00 down 0.50%" in res["spoken_text"]
+    assert "couldn't get data for XYZQ" in res["spoken_text"]
+
+
+@pytest.mark.asyncio
+async def test_volume_comparison_reports_volumes():
+    with patch("agent.tools.stocks._fetch_quote_sync", side_effect=lambda s, f="price": _quote(s, volume=2_500_000)):
+        res = await compare_stocks({"symbols": ["AAPL", "TSLA"], "field": "volume"})
+    assert res["spoken_text"] == "AAPL 2.50 million shares vs TSLA 2.50 million shares"
+
+
+@pytest.mark.asyncio
+async def test_indian_ticker_is_spoken_in_rupees():
+    with patch("agent.tools.stocks._fetch_quote_sync", return_value=_quote("RELIANCE.NS", price=1202.8)):
+        res = await get_stock_quote({"symbols": ["RELIANCE.NS"], "field": "price"})
+    assert "1,202.80 rupees" in res["spoken_text"]

@@ -1,5 +1,5 @@
 # =============================================================================
-# Production Dockerfile for DataForge Rime Starter Voice Agent
+# Production Dockerfile for the AI Voice Assistant
 # Multi-stage / minimal footprint with unprivileged appuser & SQLite WAL volume
 # =============================================================================
 

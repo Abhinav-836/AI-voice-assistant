@@ -4,6 +4,7 @@ Encapsulates all SQL queries to keep business logic clean and maintainable.
 """
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from pathlib import Path
@@ -17,6 +18,48 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+DEFAULT_SETTINGS = {
+    "voice_model": "coda",
+    "voice_speaker": "celeste",
+    "voice_speed": 1.0,
+    "auto_speak": 1,
+}
+VOICE_SPEED_RANGE = (0.5, 2.0)
+_VOICE_ID_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+
+def sanitize_settings(raw: Optional[Dict[str, Any]], base: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Merge user-supplied voice settings onto `base`, keeping only valid values.
+
+    These values go straight into the Rime TTS plugin, so anything that is
+    not a short lowercase id (model, speaker) or a number in range (speed)
+    is ignored instead of stored.
+    """
+    result = dict(DEFAULT_SETTINGS)
+    if base:
+        result.update({k: base[k] for k in DEFAULT_SETTINGS if k in base and base[k] is not None})
+    if not isinstance(raw, dict):
+        return result
+
+    for key in ("voice_model", "voice_speaker"):
+        value = raw.get(key)
+        if isinstance(value, str) and _VOICE_ID_RE.match(value.strip().lower()):
+            result[key] = value.strip().lower()
+
+    speed = raw.get("voice_speed")
+    try:
+        if speed is not None and not isinstance(speed, bool):
+            low, high = VOICE_SPEED_RANGE
+            result["voice_speed"] = round(min(high, max(low, float(speed))), 2)
+    except (TypeError, ValueError):
+        pass
+
+    if "auto_speak" in raw:
+        result["auto_speak"] = 1 if raw.get("auto_speak") else 0
+
+    return result
+
+
 class Repository:
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path
@@ -26,9 +69,16 @@ class Repository:
     # SESSIONS
     # =========================================================================
 
-    def create_session(self, session_id: str, room_name: str, client_ip: str = "") -> Dict[str, Any]:
-        """Create and persist a new isolated session."""
+    def create_session(
+        self,
+        session_id: str,
+        room_name: str,
+        client_ip: str = "",
+        settings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create and persist a new isolated session with its voice settings."""
         now = _utc_now_iso()
+        voice = sanitize_settings(settings)
         with get_db_connection(self.db_path) as conn:
             conn.execute(
                 """
@@ -41,9 +91,10 @@ class Repository:
             conn.execute(
                 """
                 INSERT INTO settings (session_id, voice_model, voice_speaker, voice_speed, auto_speak, updated_at)
-                VALUES (?, 'coda', 'celeste', 1.0, 1, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, now),
+                (session_id, voice["voice_model"], voice["voice_speaker"],
+                 voice["voice_speed"], voice["auto_speak"], now),
             )
 
         return {
@@ -232,22 +283,19 @@ class Repository:
             row = conn.execute("SELECT * FROM settings WHERE session_id = ?", (session_id,)).fetchone()
             if row:
                 return dict(row)
-        return {
-            "session_id": session_id,
-            "voice_model": "coda",
-            "voice_speaker": "celeste",
-            "voice_speed": 1.0,
-            "auto_speak": 1,
-            "updated_at": _utc_now_iso(),
-        }
+        return {"session_id": session_id, **DEFAULT_SETTINGS, "updated_at": _utc_now_iso()}
 
-    def update_settings(self, session_id: str, new_settings: Dict[str, Any]) -> Dict[str, Any]:
-        """Update or insert settings for a session."""
+    def update_settings(self, session_id: str, new_settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update an existing session's settings. Returns None if the session doesn't exist.
+
+        Settings belong to a session (foreign key), so there is no "global"
+        row to write to. The old API tried to save to session "global",
+        which always failed with a foreign-key error.
+        """
+        if not self.get_session(session_id):
+            return None
         now = _utc_now_iso()
-        model = new_settings.get("voice_model", "coda")
-        speaker = new_settings.get("voice_speaker", "celeste")
-        speed = float(new_settings.get("voice_speed", 1.0))
-        auto_speak = 1 if new_settings.get("auto_speak", True) else 0
+        voice = sanitize_settings(new_settings, base=self.get_settings(session_id))
 
         with get_db_connection(self.db_path) as conn:
             conn.execute(
@@ -261,17 +309,11 @@ class Repository:
                     auto_speak = excluded.auto_speak,
                     updated_at = excluded.updated_at
                 """,
-                (session_id, model, speaker, speed, auto_speak, now),
+                (session_id, voice["voice_model"], voice["voice_speaker"],
+                 voice["voice_speed"], voice["auto_speak"], now),
             )
 
-        return {
-            "session_id": session_id,
-            "voice_model": model,
-            "voice_speaker": speaker,
-            "voice_speed": speed,
-            "auto_speak": auto_speak,
-            "updated_at": now,
-        }
+        return {"session_id": session_id, **voice, "updated_at": now}
 
 
 # Global repository instance - lazy initialization for test isolation

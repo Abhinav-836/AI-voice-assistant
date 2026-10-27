@@ -9,6 +9,7 @@
 
 import { state } from './state.js';
 import { notifications } from './notifications.js';
+import { getVoiceSettings, rememberSession } from './session-store.js';
 
 class LiveKitManager {
   constructor() {
@@ -64,50 +65,44 @@ class LiveKitManager {
     }
   }
 
-  async fetchToken() {
-    try {
-      // Primary: Request an isolated session from the server
-      const sessionResp = await fetch("/api/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          identity: "user-" + Math.random().toString(36).slice(2, 8)
-        })
-      });
-      if (sessionResp.ok) {
-        const data = await sessionResp.json();
-        state.connection.sessionId = data.session_id;
-        state.connection.roomName = data.room_name;
-        return data;
-      }
+  /**
+   * Create a private session on the server. The response includes the
+   * session's secret key, which this browser keeps to read its own history.
+   * There is deliberately no fallback to a shared room: if the server can't
+   * create a session, the user sees an error instead of being dropped into
+   * a room other visitors could also join.
+   */
+  async createSession() {
+    const resp = await fetch("/api/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identity: "user-" + Math.random().toString(36).slice(2, 8),
+        settings: getVoiceSettings(),
+      }),
+    });
 
-      // Fallback: Legacy token endpoint
-      const resp = await fetch("/api/token");
-      if (resp.ok) {
-        return await resp.json();
-      }
-      throw new Error(`Session endpoint returned ${sessionResp.status}`);
-    } catch (err) {
-      console.warn("Could not fetch token from server, checking localStorage...", err);
-      const token = localStorage.getItem("LIVEKIT_TOKEN");
-      const url = localStorage.getItem("LIVEKIT_URL");
-      if (token && url) {
-        return { token, url, room: "console-demo" };
-      }
-      return null;
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data.error || `Could not start a session (HTTP ${resp.status})`);
     }
+
+    state.connection.sessionId = data.session_id;
+    state.connection.sessionKey = data.session_key;
+    state.connection.roomName = data.room_name;
+    rememberSession({ id: data.session_id, key: data.session_key, createdAt: data.created_at });
+    return data;
   }
 
   async connect() {
     state.setConnectionStatus("connecting");
 
     try {
-      const creds = await this.fetchToken();
-      if (!creds || !creds.token || !creds.url) {
-        console.warn("LiveKit credentials not configured. Running in interactive demo mode.");
-        state.setConnectionStatus("connected");
-        this.isConnected = true;
-        return true;
+      // Previously, a failed token request switched the UI to "connected"
+      // in a fake demo mode where nothing actually worked.
+      const creds = await this.createSession();
+      if (!creds.token || !creds.url) {
+        throw new Error("Server returned an incomplete session");
       }
 
       if (typeof LivekitClient === "undefined") {
@@ -117,11 +112,10 @@ class LiveKitManager {
       this.room = new LivekitClient.Room({
         adaptiveStream: true,
         dynacast: true,
-        // FIXED (echo bug): explicit capture defaults for every mic track
-        // this Room publishes, instead of relying on unstated SDK
-        // defaults. Without echoCancellation explicitly on, some
-        // browser/OS/driver combinations let the TTS output picked up
-        // by the mic loop straight back into Deepgram STT.
+        // Explicit capture defaults for every mic track this Room
+        // publishes. Without echoCancellation explicitly on, some
+        // browser/OS/driver combinations let the TTS output picked up by
+        // the mic loop straight back into Deepgram STT.
         audioCaptureDefaults: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -218,9 +212,9 @@ class LiveKitManager {
       await this.unlockAudio();
       await this.room.localParticipant.setMicrophoneEnabled(enable);
 
-      // FIXED (echo bug): capture and expose the SAME local track LiveKit
-      // just published, so voice.js's visualizer can reuse it instead of
-      // opening an independent getUserMedia() stream.
+      // Expose the SAME local track LiveKit just published, so voice.js's
+      // visualizer reuses it instead of opening a second getUserMedia()
+      // stream (which caused echo).
       if (enable) {
         const pub = this.room.localParticipant.getTrackPublication(
           LivekitClient.Track.Source.Microphone

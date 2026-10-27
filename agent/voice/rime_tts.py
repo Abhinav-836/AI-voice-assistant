@@ -1,6 +1,5 @@
 """
-Rime TTS integration — CRITICAL for eligibility. Rime must be the primary
-spoken output, streamed via the official LiveKit Rime plugin (not called
+Rime TTS integration. Rime is the agent's spoken output, streamed through the official LiveKit Rime plugin. (not called
 as an incidental/side channel).
 
 Install:

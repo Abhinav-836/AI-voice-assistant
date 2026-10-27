@@ -1,6 +1,6 @@
 # System Architecture & Technical Specifications
 
-This document outlines the architecture, concurrency model, data persistence, and security controls for the DataForge Rime Starter Voice Agent.
+This document outlines the architecture, concurrency model, data persistence, and security controls of the AI Voice Assistant.
 
 ---
 
@@ -15,14 +15,16 @@ The system operates across three decoupled layers:
 
 2. **Server & Gateway Layer (`frontend/serve.py`)**:
    - HTTP/1.1 multi-threaded server with security headers, CORS origin verification, and IP rate limiting.
-   - REST API for session isolation, SQLite query endpoints, and short-lived LiveKit access tokens (30-minute TTL).
-   - Serves de-mocked SPA assets without external CDN dependencies for core state.
+   - Creates private sessions, each with a signed session key (`agent/security.py`), and issues short-lived LiveKit tokens (30-minute TTL).
+   - Session transcripts and settings are only readable with that session's key; the full session list is admin-only.
+   - Serves the frontend (no build step).
 
 3. **Voice Agent Worker Layer (`agent/main.py`)**:
    - LiveKit WebRTC transport connecting browser microphone to pipeline.
    - Deepgram Nova-2 streaming STT with Silero Voice Activity Detection (VAD).
    - Heuristic intent router (`agent/router.py`) providing sub-millisecond intent extraction and version tracking.
-   - LLM reasoning (Groq Llama-3 / OpenAI GPT-4o-mini) executing tools decorated with `@function_tool`.
+   - LLM reasoning (OpenAI GPT-4o-mini, with Groq as fallback) executing tools decorated with `@function_tool`.
+   - Typed chat messages go through the same versioning and fencing as speech (`ContinuityAgent.process_user_text`).
    - Rime Coda TTS streaming synthesized audio over WebSocket.
    - Persistent SQLite WAL repository (`agent/db/repository.py`) recording all sessions, turns, tool latencies, and user settings.
 
@@ -43,7 +45,7 @@ Without fencing, Turn 1 completes at 500ms and sends Apple's price to the LLM/TT
 
 ### The Fencing Protocol
 ```
-User Utterance (STT Finalized)
+User Utterance (STT finalized, or a typed chat message)
       │
       ▼
 router.route_intent(text, current_intent)
@@ -62,7 +64,8 @@ tool_mgr.run(version, coroutine)
       └─► After Execution: If not state.is_current(version)  ──► Discard, return None
             │
             ▼ (If Current)
-Return clean data to LLM -> Synthesize spoken speech with Rime TTS
+Return the result to the LLM -> speak it with Rime TTS
+(A fenced call returns a "superseded" note instead of data, so nothing stale is spoken.)
 ```
 
 ---
@@ -143,10 +146,13 @@ CREATE TABLE settings (
 
 | Vector | Mitigation |
 |---|---|
-| **Multi-Tenant Cross-Talk** | Cryptographically isolated LiveKit room per session (`room_{session_id}`). |
-| **Token Hijacking** | Access tokens minted with a 30-minute strict TTL (`datetime.timedelta(minutes=30)`). |
+| **Joining someone else's room** | Tokens are only issued at session creation or with the session's secret key (HMAC of the session id). There is no endpoint that issues a token for an arbitrary room. |
+| **Reading other users' transcripts** | `GET /api/sessions/{id}` requires the `X-Session-Key` header; the session list requires `ADMIN_TOKEN`. Wrong keys and unknown ids both return 404. |
+| **Token Hijacking** | Access tokens minted with a 30-minute strict TTL (`datetime.timedelta(minutes=30)`) for a single room. |
+| **Settings tampering** | Settings can only be changed with the session key; values are allow-listed before reaching the TTS engine. |
 | **XSS & Injection** | Strict CSP: `default-src 'self'`, `script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net`. |
 | **Clickjacking** | `X-Frame-Options: DENY`. |
 | **MIME Sniffing** | `X-Content-Type-Options: nosniff`. |
-| **Denial of Service** | Sliding-window in-memory IP rate limiting and 64KB maximum body guards. |
+| **Denial of Service** | Sliding-window in-memory IP rate limiting (`X-Forwarded-For` trusted only with `TRUST_PROXY=1`), 64KB maximum body, 500-character chat messages, at most 5 symbols per comparison. |
+| **CORS** | Only origins in `ALLOWED_ORIGINS` receive CORS headers; others get none (never `null`). |
 | **Secret Leaks** | Zero tracked secrets in repository; environment startup validator masks all logging. |

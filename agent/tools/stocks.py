@@ -199,16 +199,69 @@ def _fetch_quote_sync(symbol: str, field: str = "price") -> Optional[Dict[str, A
 
 
 # =============================================================================
+# SPOKEN FORMATTING
+# =============================================================================
+
+def price_text(symbol: str, price: float) -> str:
+    """Price as it should be spoken: dollars for US tickers, rupees for NSE/BSE."""
+    if symbol.upper().endswith((".NS", ".BO")):
+        return f"{price:,.2f} rupees"
+    return f"${price:,.2f}"
+
+
+def spoken_quote(data: Dict[str, Any], field: str) -> str:
+    """One stock, one sentence."""
+    if field == "volume":
+        vol = data.get("volume")
+        if vol:
+            return f"{data['symbol']} trading volume is {format_volume(vol)} shares today."
+        return f"Trading volume for {data['symbol']} is currently unavailable."
+    pct = data.get("percent_change") or 0.0
+    direction = "up" if pct >= 0 else "down"
+    return (
+        f"{data['symbol']} is at {price_text(data['symbol'], data['current_price'])}, "
+        f"{direction} {abs(pct):.2f}% today."
+    )
+
+
+def spoken_comparison(results: List[Dict[str, Any]], field: str, failed: List[str]) -> str:
+    """Several stocks side by side, plus a note about any that couldn't be fetched."""
+    parts = []
+    for data in results:
+        if field == "volume":
+            vol = data.get("volume")
+            parts.append(f"{data['symbol']} {format_volume(vol)} shares" if vol else f"{data['symbol']} volume unavailable")
+        else:
+            pct = data.get("percent_change") or 0.0
+            direction = "up" if pct >= 0 else "down"
+            parts.append(
+                f"{data['symbol']} at {price_text(data['symbol'], data['current_price'])} "
+                f"{direction} {abs(pct):.2f}%"
+            )
+    text = " vs ".join(parts) if parts else "No comparison data available."
+    if failed:
+        text += f" I couldn't get data for {', '.join(failed)}."
+    return text
+
+
+# =============================================================================
 # ASYNC TOOL CALLS (EXPOSED TO AGENT)
 # =============================================================================
 
 async def get_stock_quote(intent: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Fetch stock quote for single or multiple symbols.
-    Non-blocking: executes synchronous network calls in background executor.
+    Fetch a quote for one symbol, or several for a comparison.
+    Non-blocking: synchronous network calls run in a background executor.
+
+    Every successful result carries a ready-to-speak `spoken_text`, so the
+    voice layer never has to rebuild the sentence (and can't get the field
+    wrong, e.g. answering a volume question with the price).
     """
     symbols = intent.get("symbols", [])
-    field = intent.get("field", "price")
+    field = (intent.get("field") or "price").lower()
+    if field not in ("price", "volume"):
+        field = "price"
+    is_comparison = bool(intent.get("is_comparison")) or len(symbols) > 1
 
     if not symbols:
         return {"error": "No ticker symbol provided"}
@@ -225,6 +278,7 @@ async def get_stock_quote(intent: Dict[str, Any]) -> Dict[str, Any]:
     ]
     results = await asyncio.gather(*tasks, return_exceptions=False)
     valid_results = [r for r in results if r is not None]
+    failed = [sym.upper() for sym, r in zip(symbols, results) if r is None]
 
     if not valid_results:
         return {
@@ -232,38 +286,20 @@ async def get_stock_quote(intent: Dict[str, Any]) -> Dict[str, Any]:
             "symbols": symbols,
         }
 
-    if len(valid_results) == 1:
+    if not is_comparison:
         data = valid_results[0]
         data["field"] = field
-
-        if field == "volume":
-            vol = data.get("volume")
-            if vol:
-                vol_str = format_volume(vol)
-                data["spoken_text"] = f"{data['symbol']} trading volume is {vol_str} shares today."
-            else:
-                data["spoken_text"] = f"Trading volume for {data['symbol']} is currently unavailable."
-        else:
-            pct = data.get("percent_change", 0.0)
-            direction = "up" if pct >= 0 else "down"
-            data["spoken_text"] = (
-                f"{data['symbol']} is at ${data['current_price']:.2f}, "
-                f"{direction} {abs(pct):.2f}% today."
-            )
+        data["spoken_text"] = spoken_quote(data, field)
         return data
 
-    parts = []
-    for data in valid_results:
-        pct = data.get("percent_change", 0.0)
-        direction = "up" if pct >= 0 else "down"
-        parts.append(f"{data['symbol']} at ${data['current_price']:.2f} {direction} {abs(pct):.2f}%")
-
-    spoken_summary = " vs ".join(parts)
+    # A comparison always returns a list, even if only one symbol came back,
+    # and says which ones failed instead of reporting "no data".
     return {
         "is_comparison": True,
         "field": field,
         "results": valid_results,
-        "spoken_text": spoken_summary,
+        "failed_symbols": failed,
+        "spoken_text": spoken_comparison(valid_results, field, failed),
     }
 
 

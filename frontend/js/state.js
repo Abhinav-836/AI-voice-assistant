@@ -1,5 +1,5 @@
 /**
- * Global Application State for DataForge Rime Voice Agent
+ * Global application state for the AI Voice Assistant
  */
 
 class AppState {
@@ -8,6 +8,9 @@ class AppState {
       status: 'connected', // 'disconnected', 'connecting', 'connected', 'error'
       room: null,
       identity: null,
+      sessionId: null,
+      sessionKey: null,
+      roomName: null,
       token: null,
       livekitUrl: null
     };

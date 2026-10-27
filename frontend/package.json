@@ -1,7 +1,7 @@
 {
-  "name": "dataforge-rime-frontend",
+  "name": "ai-voice-assistant-frontend",
   "private": true,
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Plain HTML/JS client — no build step needed. livekit-client loaded via CDN in index.html for speed; this package.json is here mainly for dependency documentation.",
   "dependencies": {
     "livekit-client": "^2.0.0"

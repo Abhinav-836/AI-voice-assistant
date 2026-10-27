@@ -114,3 +114,26 @@ def test_settings_persistence():
         assert updated["voice_speaker"] == "marcus"
         assert updated["voice_speed"] == 1.25
         assert updated["auto_speak"] == 0
+
+
+
+def test_settings_validation_and_global_row():
+    from agent.db.repository import sanitize_settings
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Repository(Path(tmpdir) / "test.db")
+
+        # There is no "global" session: updating it returns None instead of
+        # crashing with a foreign-key error (the old behaviour).
+        assert repo.update_settings("global", {"voice_speed": 1.2}) is None
+
+        repo.create_session("s1", "room_s1", settings={"voice_speaker": "Marcus", "voice_speed": "0.1"})
+        s = repo.get_settings("s1")
+        assert s["voice_speaker"] == "marcus"
+        assert s["voice_speed"] == 0.5  # clamped to the allowed range
+
+        # Partial updates keep the other values.
+        repo.update_settings("s1", {"voice_model": "v1"})
+        s = repo.get_settings("s1")
+        assert (s["voice_model"], s["voice_speaker"]) == ("v1", "marcus")
+
+    assert sanitize_settings({"voice_model": "x" * 50, "voice_speed": True})["voice_model"] == "coda"

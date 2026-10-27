@@ -53,7 +53,57 @@ COMMON_CITY_TIMEZONES = {
     "cape town": "Africa/Johannesburg",
     "johannesburg": "Africa/Johannesburg",
     "south africa": "Africa/Johannesburg",
+    # Countries and common names that aren't part of an IANA zone name
+    "japan": "Asia/Tokyo",
+    "china": "Asia/Shanghai",
+    "beijing": "Asia/Shanghai",
+    "uk": "Europe/London",
+    "england": "Europe/London",
+    "britain": "Europe/London",
+    "usa": "America/New_York",
+    "us": "America/New_York",
+    "america": "America/New_York",
+    "germany": "Europe/Berlin",
+    "france": "Europe/Paris",
+    "italy": "Europe/Rome",
+    "spain": "Europe/Madrid",
+    "russia": "Europe/Moscow",
+    "uae": "Asia/Dubai",
+    "abu dhabi": "Asia/Dubai",
+    "saudi arabia": "Asia/Riyadh",
+    "pakistan": "Asia/Karachi",
+    "bangladesh": "Asia/Dhaka",
+    "nepal": "Asia/Kathmandu",
+    "sri lanka": "Asia/Colombo",
+    "australia": "Australia/Sydney",
+    "new zealand": "Pacific/Auckland",
+    "canada": "America/Toronto",
+    "brazil": "America/Sao_Paulo",
+    "korea": "Asia/Seoul",
+    "south korea": "Asia/Seoul",
+    "bangalore": "Asia/Kolkata",
+    "bengaluru": "Asia/Kolkata",
+    "chennai": "Asia/Kolkata",
+    "hyderabad": "Asia/Kolkata",
+    "pune": "Asia/Kolkata",
+    "patna": "Asia/Kolkata",
+    "seattle": "America/Los_Angeles",
+    "boston": "America/New_York",
+    "texas": "America/Chicago",
+    "california": "America/Los_Angeles",
 }
+
+
+def _zone_by_city_name(query_lower: str) -> Optional[str]:
+    """Match a city against IANA zone names, e.g. "tokyo" -> Asia/Tokyo,
+    "new york" -> America/New_York, "kathmandu" -> Asia/Kathmandu."""
+    wanted = query_lower.strip().replace(" ", "_")
+    if not wanted:
+        return None
+    for name in zoneinfo.available_timezones():
+        if name.rsplit("/", 1)[-1].lower() == wanted:
+            return name
+    return None
 
 # Short-lived TTL cache for time lookups. Time doesn't change meaningfully
 # within 10s, and the logs showed the same timezone being fetched twice per turn.
@@ -139,8 +189,17 @@ def _get_time_sync(timezone_or_city: str = "America/New_York") -> Dict[str, Any]
         pass
 
     if dt is None:
+        zone = _zone_by_city_name(query_lower)
+        if zone:
+            tz_obj = zoneinfo.ZoneInfo(zone)
+            dt = datetime.now(tz_obj)
+            iana_tz = zone
+
+    if dt is None:
+        # "time in Mumbai right now" -> match known names as whole words, so
+        # short keys like "us" don't match inside "Houston" or "Belarus".
         for known_city, tz_name in COMMON_CITY_TIMEZONES.items():
-            if known_city in query_lower:
+            if re.search(rf"\b{re.escape(known_city)}\b", query_lower):
                 try:
                     tz_obj = zoneinfo.ZoneInfo(tz_name)
                     dt = datetime.now(tz_obj)
@@ -161,14 +220,16 @@ def _get_time_sync(timezone_or_city: str = "America/New_York") -> Dict[str, Any]
             pass
 
     if dt is None:
-        dt = datetime.now()
-        iana_tz = "Local"
+        # Previously this silently returned the SERVER's local time labelled
+        # "Local", so "time in Japan" could be answered with Indian time.
+        return {"error": f"Unknown location '{query}'. Use a city name or an IANA timezone like Asia/Tokyo."}
 
     utc_offset = dt.strftime("%z") or "UTC"
 
     result = {
         "timezone": iana_tz,
         "datetime": dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "spoken_time": dt.strftime("%I:%M %p").lstrip("0"),
         "day_of_week": dt.strftime("%A"),
         "month": dt.strftime("%B"),
         "year": dt.year,
@@ -319,7 +380,7 @@ def _search_sync(query: str, limit: int = 5) -> Dict[str, Any]:
         try:
             wiki_term = urllib.parse.quote(clean_query.replace(" ", "_"))
             wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_term}"
-            resp = requests.get(wiki_url, headers={"User-Agent": "DataForgeVoiceAgent/1.0"}, timeout=SEARCH_TIMEOUT_SECONDS)
+            resp = requests.get(wiki_url, headers={"User-Agent": "AIVoiceAssistant/1.0"}, timeout=SEARCH_TIMEOUT_SECONDS)
             if resp.ok:
                 data = resp.json()
                 if data.get("title") and data.get("extract"):

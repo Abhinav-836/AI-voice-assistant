@@ -43,7 +43,9 @@ class AppConfig:
         self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
         self.openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
         self.groq_api_key: str = os.getenv("GROQ_API_KEY", "").strip()
-        self.groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip()
+        self.groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip()
+        # Order in which LLM providers are tried (see livekit_handler.llm_provider_order).
+        self.llm_providers: str = os.getenv("LLM_PROVIDERS", "openai,groq").strip()
 
         # Financial Data
         self.finnhub_api_key: str = os.getenv("FINNHUB_API_KEY", "").strip()
@@ -51,6 +53,20 @@ class AppConfig:
         # Security & CORS
         raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5500,http://127.0.0.1:5500")
         self.allowed_origins: List[str] = [o.strip() for o in raw_origins.split(",") if o.strip()]
+
+        # Session keys (see agent/security.py). Falls back to the LiveKit
+        # API secret when unset, so existing deployments keep working.
+        self.session_signing_key: str = os.getenv("SESSION_SIGNING_KEY", "").strip()
+
+        # Bearer token for admin-only endpoints (GET /api/sessions). The
+        # admin endpoints are disabled while this is empty.
+        self.admin_token: str = os.getenv("ADMIN_TOKEN", "").strip()
+
+        # Set TRUST_PROXY=1 only when running behind a reverse proxy that
+        # sets X-Forwarded-For (Render, Railway, Nginx...). Without a proxy
+        # the header is client-controlled and must be ignored, otherwise
+        # anyone can dodge the rate limit by sending a fake IP.
+        self.trust_proxy: bool = os.getenv("TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
 
         # Rate Limiting
         try:
@@ -111,9 +127,13 @@ class AppConfig:
             "groq_model": self.groq_model,
             "finnhub_configured": bool(self.finnhub_api_key),
             "allowed_origins": self.allowed_origins,
+            "session_signing_key_set": bool(self.session_signing_key),
+            "admin_endpoints_enabled": bool(self.admin_token),
+            "trust_proxy": self.trust_proxy,
             "database_path": str(self.database_path),
             "artificial_delay_seconds": self.artificial_delay_seconds,
             "log_level": self.log_level,
+            "llm_providers": self.llm_providers,
         }
 
 
