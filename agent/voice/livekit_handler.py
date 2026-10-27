@@ -127,15 +127,25 @@ def _build_llm():
             llms.append(openai.LLM(model=model))
         elif name == "groq":
             model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-            logger.info(f"LLM #{len(llms) + 1}: Groq (model={model})")
-            llms.append(groq.LLM(model=model))
+            kwargs = {}
+            # gpt-oss is a reasoning model. At its default effort it can think
+            # for 5+ seconds before the first token, which tripped the
+            # fallback timeout in production. "low" is plenty for a voice
+            # assistant. Only reasoning models accept this parameter.
+            if "gpt-oss" in model:
+                kwargs["reasoning_effort"] = os.getenv("GROQ_REASONING_EFFORT", "low").strip() or "low"
+            logger.info(f"LLM #{len(llms) + 1}: Groq (model={model}, {kwargs or 'default settings'})")
+            llms.append(groq.LLM(model=model, **kwargs))
 
     if not llms:
         logger.warning("No LLM API key found (need OPENAI_API_KEY or GROQ_API_KEY)")
         return None
     if len(llms) == 1:
         return llms[0]
-    return llm_module.FallbackAdapter(llms)
+    # attempt_timeout is how long one provider may take to START answering
+    # before the adapter gives up on it. The 5s default cut off slow-but-
+    # healthy Groq replies and wasted the turn on the next provider.
+    return llm_module.FallbackAdapter(llms, attempt_timeout=10.0)
 
 
 def prewarm(proc: JobProcess) -> None:
