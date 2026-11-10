@@ -40,6 +40,8 @@ def live_server(repo):
         "admin": config.admin_token,
         "trust_proxy": config.trust_proxy,
         "rate": serve.RATE_LIMIT_MAX_REQUESTS,
+        "per_ip": config.sessions_per_ip_daily,
+        "total": config.sessions_daily_total,
     }
     serve.repo = repo
     serve.LIVEKIT_URL = "wss://test.livekit.invalid"
@@ -49,6 +51,9 @@ def live_server(repo):
     config.admin_token = ADMIN_TOKEN
     config.trust_proxy = False
     serve.RATE_LIMIT_MAX_REQUESTS = 10_000
+    # Daily session caps off for the suite; test_daily_session_caps turns them on
+    config.sessions_per_ip_daily = 0
+    config.sessions_daily_total = 0
 
     handler = functools.partial(serve.ProductionServerHandler, directory=str(serve.FRONTEND_DIR))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -65,6 +70,8 @@ def live_server(repo):
     config.admin_token = saved["admin"]
     config.trust_proxy = saved["trust_proxy"]
     serve.RATE_LIMIT_MAX_REQUESTS = saved["rate"]
+    config.sessions_per_ip_daily = saved["per_ip"]
+    config.sessions_daily_total = saved["total"]
 
 
 def new_session(live_server, **body):
@@ -306,3 +313,32 @@ def test_malformed_json_is_400(live_server):
         f"{live_server}/api/session", data="{not json", headers={"Content-Type": "application/json"}
     )
     assert resp.status_code == 400
+
+# --- Cost guards ---------------------------------------------------------------
+
+def test_daily_session_caps(live_server, repo, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    used_by_me = repo.count_sessions_since(since, "127.0.0.1")
+    used_total = repo.count_sessions_since(since)
+
+    # Per visitor: one more allowed, then 429 with a clear message
+    monkeypatch.setattr(config, "sessions_per_ip_daily", used_by_me + 1)
+    new_session(live_server)
+    resp = requests.post(f"{live_server}/api/session", json={"identity": "tester"})
+    assert resp.status_code == 429
+    assert "voice sessions for today" in resp.json()["error"]
+
+    # Server-wide total
+    monkeypatch.setattr(config, "sessions_per_ip_daily", 0)
+    monkeypatch.setattr(config, "sessions_daily_total", used_total + 1)
+    resp = requests.post(f"{live_server}/api/session", json={"identity": "tester"})
+    assert resp.status_code == 429
+    assert "daily limit" in resp.json()["error"]
+
+
+def test_legal_pages_are_served(live_server):
+    for page in ("privacy.html", "terms.html"):
+        resp = requests.get(f"{live_server}/{page}")
+        assert resp.status_code == 200
+        assert "Abhinav Ashutosh" in resp.text

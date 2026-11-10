@@ -78,6 +78,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateStats();
       }
 
+      // The server closes the room after MAX_SESSION_MINUTES (cost guard)
+      if (data.type === 'session_limit') {
+        notifications.info(`Sessions last up to ${data.minutes} minutes. Tap the orb to start a new one.`);
+      }
+
       // Tool events
       if (data.type === 'tool_start') {
         updateToolActivity(data.name, 'running', '');

@@ -41,6 +41,7 @@ from agent.tools.stocks import get_stock_quote, compare_stocks
 from agent.tools.search import get_weather, get_time
 from agent.tools import knowledge
 from agent.db.repository import repo
+from agent.config import config
 from agent.utils.logger import get_logger
 
 load_dotenv()
@@ -737,6 +738,23 @@ async def entrypoint(ctx: JobContext) -> None:
 
     await session.start(agent=agent, room=ctx.room)
     await ctx.connect()
+
+    # Cost guard: every minute here is billed by Deepgram, Rime, the LLM and
+    # LiveKit, so close the room after MAX_SESSION_MINUTES (agent/config.py).
+    max_minutes = config.max_session_minutes
+    if max_minutes > 0:
+        async def end_when_time_is_up() -> None:
+            await asyncio.sleep(max_minutes * 60)
+            logger.info(f"Session {session_id} reached {max_minutes} minutes; closing the room")
+            await agent.broadcast("session_limit", {"minutes": max_minutes})
+            await asyncio.sleep(1.5)  # let the message reach the browser
+            try:
+                await ctx.delete_room()
+            except Exception as e:
+                logger.warning(f"Could not delete room {room_name}: {e}")
+                ctx.shutdown(reason="max session length")
+
+        asyncio.create_task(end_when_time_is_up())
 
 
 if __name__ == "__main__":

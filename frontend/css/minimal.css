@@ -1045,3 +1045,17 @@ html {
 .transcript-container::-webkit-scrollbar-thumb:hover {
   background: rgba(255,255,255,0.15);
 }
+/* Notice under the voice orb */
+.legal-note {
+  max-width: 420px;
+  margin: 6px auto 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #64748b;
+  text-align: center;
+}
+.legal-note a {
+  color: #94a3b8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

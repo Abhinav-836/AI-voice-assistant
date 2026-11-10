@@ -74,6 +74,19 @@ class AppConfig:
         except ValueError:
             self.rate_limit_per_minute = 60
 
+        # Cost guards. Every minute of a voice session is billed by Deepgram,
+        # Rime, the LLM and LiveKit, so: sessions one visitor (IP) and the
+        # whole server can start per rolling 24 hours, and the longest a
+        # session may run before the room is closed. 0 switches a limit off.
+        def _int_env(name: str, default: int) -> int:
+            try:
+                return int(os.getenv(name, str(default)))
+            except ValueError:
+                return default
+        self.sessions_per_ip_daily: int = _int_env("SESSIONS_PER_IP_DAILY", 3)
+        self.sessions_daily_total: int = _int_env("SESSIONS_DAILY_TOTAL", 20)
+        self.max_session_minutes: int = _int_env("MAX_SESSION_MINUTES", 5)
+
         # Database Path
         raw_db_path = os.getenv("DATABASE_PATH", "data/agent.db")
         self.database_path: Path = (PROJECT_ROOT / raw_db_path).resolve()

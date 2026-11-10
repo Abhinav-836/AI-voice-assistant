@@ -1,0 +1,11 @@
+@import './css/variables.css';
+body { margin: 0; background: var(--bg-primary); color: #cbd5e1; font: 15px/1.65 Inter, system-ui, sans-serif; }
+main { max-width: 680px; margin: 0 auto; padding: 40px 20px 64px; }
+.brand { color: #fff; font-weight: 700; text-decoration: none; }
+h1 { margin: 36px 0 4px; color: #fff; font-size: 30px; }
+.updated { margin: 0; color: #64748b; font-size: 13px; }
+h2 { margin: 32px 0 8px; color: #fff; font-size: 19px; }
+li { margin: 6px 0; }
+a { color: #a5b4fc; }
+strong { color: #e2e8f0; }
+.links { margin-top: 48px; display: flex; gap: 20px; font-size: 14px; }

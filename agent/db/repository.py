@@ -69,6 +69,16 @@ class Repository:
     # SESSIONS
     # =========================================================================
 
+    def count_sessions_since(self, since_iso: str, client_ip: Optional[str] = None) -> int:
+        """Sessions created at or after since_iso, optionally from one IP (for the daily caps)."""
+        query = "SELECT COUNT(*) FROM sessions WHERE created_at >= ?"
+        params: list = [since_iso]
+        if client_ip is not None:
+            query += " AND client_ip = ?"
+            params.append(client_ip)
+        with get_db_connection(self.db_path) as conn:
+            return int(conn.execute(query, params).fetchone()[0])
+
     def create_session(
         self,
         session_id: str,

@@ -61,6 +61,22 @@ IDENTITY_RE = re.compile(r"[^A-Za-z0-9_-]")
 BLOCKED_STATIC = {"/serve.py", "/package.json"}
 
 
+def _daily_session_limit_error(client_ip: str) -> Optional[str]:
+    """
+    Daily caps on new voice sessions (see agent/config.py), counted from the
+    sessions table over a rolling 24 hours. Returns the message to show, or
+    None when the session may start.
+    """
+    since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).isoformat()
+    total_limit = config.sessions_daily_total
+    if total_limit > 0 and repo.count_sessions_since(since) >= total_limit:
+        return "The assistant has reached its daily limit of voice sessions. Please try again in a few hours."
+    ip_limit = config.sessions_per_ip_daily
+    if ip_limit > 0 and repo.count_sessions_since(since, client_ip) >= ip_limit:
+        return f"You've used your {ip_limit} voice sessions for today. You can start another 24 hours after your first one."
+    return None
+
+
 def _is_rate_limited(client_ip: str) -> bool:
     global _last_rate_limit_sweep
     now = time.monotonic()
@@ -380,6 +396,10 @@ class ProductionServerHandler(http.server.SimpleHTTPRequestHandler):
             return self._send_json_response(503, {
                 "error": "Voice service is not configured on this server (LiveKit credentials missing)."
             })
+
+        limited = _daily_session_limit_error(self._get_client_ip())
+        if limited:
+            return self._send_json_response(429, {"error": limited})
 
         session_id = uuid.uuid4().hex[:16]
         room_name = f"room_{session_id}"
