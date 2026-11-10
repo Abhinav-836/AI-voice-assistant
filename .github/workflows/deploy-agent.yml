@@ -1,0 +1,57 @@
+# Deploys the voice agent to LiveKit Cloud (agent id in livekit.toml) after
+# every push to main whose CI run passes, so `lk agent deploy` never has to
+# be run by hand. The website/session server deploys separately on Render.
+#
+# One-time setup, in GitHub: Settings → Secrets and variables → Actions →
+# New repository secret:
+#   LIVEKIT_URL         wss://ai-like-jarvis-8cu02swr.livekit.cloud
+#   LIVEKIT_API_KEY     from LiveKit Cloud → Settings → API keys
+#   LIVEKIT_API_SECRET  (same place)
+# The agent's own secrets (Deepgram, Rime, OpenAI/Groq keys, limits...) stay
+# in LiveKit Cloud and are kept as they are; manage them with
+# `lk agent update-secrets`.
+name: Deploy agent
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: # "Run workflow" button for a manual redeploy
+
+concurrency:
+  group: deploy-agent
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # Only when CI passed (or when started by hand)
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Deploy exactly the commit CI tested
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Deploy to LiveKit Cloud
+        uses: livekit/deploy-action@v2.12.3
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+        with:
+          OPERATION: deploy
+          WORKING_DIRECTORY: .
+          TIMEOUT: 10m
+
+      - name: Wait until the new version is running
+        uses: livekit/deploy-action@v2.12.3
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+        with:
+          OPERATION: status-retry
+          WORKING_DIRECTORY: .
+          TIMEOUT: 5m

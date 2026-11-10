@@ -201,9 +201,11 @@ def test_llm_provider_order(monkeypatch):
 
 def test_instructions_cover_general_questions():
     from datetime import datetime
-    from agent.voice.livekit_handler import build_instructions, ASSISTANT_NAME
+    from agent.voice.livekit_handler import build_instructions, ASSISTANT_NAME, SELF_INTRO
     text = build_instructions(datetime(2026, 10, 27))
-    assert ASSISTANT_NAME in text
+    assert SELF_INTRO in text
+    if not ASSISTANT_NAME:
+        assert "your voice assistant" in text and "Nova" not in text
     assert "Tuesday, 27 October 2026" in text
     assert "Answer ANY question" in text
     for tool in ("web_search", "get_news", "calculate", "convert_currency", "lookup_topic"):

@@ -56,7 +56,10 @@ MAX_CHAT_CONTEXT_ITEMS = 40
 # Persona. ASSISTANT_NAME is how it introduces itself; USER_NAME (optional)
 # is how it addresses you; DEFAULT_LOCATION is used for "what time is it" /
 # "what's the weather" when no place is mentioned.
-ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Nova").strip() or "Nova"
+# With no ASSISTANT_NAME it has no name and introduces itself as "your voice
+# assistant" (it used to call itself "Nova").
+ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "").strip()
+SELF_INTRO = ASSISTANT_NAME or "your voice assistant"
 USER_NAME = os.getenv("USER_NAME", "").strip()
 DEFAULT_LOCATION = os.getenv("DEFAULT_LOCATION", "Asia/Kolkata").strip() or "Asia/Kolkata"
 
@@ -66,8 +69,14 @@ def build_instructions(now: Optional[datetime] = None) -> str:
     now = now or datetime.now()
     who = f"The user's name is {USER_NAME}; address them by name now and then. " if USER_NAME else ""
     return (
-        f"You are {ASSISTANT_NAME}, a sharp, friendly personal voice assistant, like a "
-        f"capable human aide. {who}"
+        (f"You are {ASSISTANT_NAME}, a sharp, friendly personal voice assistant, like a "
+         if ASSISTANT_NAME else
+         "You are a sharp, friendly personal voice assistant, like a ")
+        + "capable human aide. "
+        + (f"Your name is {ASSISTANT_NAME}. " if ASSISTANT_NAME else
+           "You don't have a personal name: if you introduce yourself or are asked "
+           "your name, say you're \"your voice assistant\". ")
+        + f"{who}"
         f"Today is {now.strftime('%A, %d %B %Y')}. The user's default location is {DEFAULT_LOCATION}.\n\n"
         "Answer ANY question: general knowledge, science, history, maths, coding, "
         "language and grammar, definitions, advice, planning, recommendations, "
@@ -257,7 +266,8 @@ class ContinuityAgent(Agent):
             self._has_greeted = True
             await self.session.generate_reply(
                 instructions=(
-                    f"Greet the user in one short sentence as {ASSISTANT_NAME}"
+                    f"Greet the user in one short sentence, introducing yourself as {SELF_INTRO}"
+                    + ("" if ASSISTANT_NAME else " (for example: \"Hi, I'm your voice assistant\")")
                     + (f", addressing them as {USER_NAME}" if USER_NAME else "")
                     + ", and offer to help with anything. Don't list your features."
                 )
